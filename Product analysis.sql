@@ -71,3 +71,80 @@ multi-product showcase pages. Analyzing the impact on website conversion rates w
 Building product-specific conversion funnels to understand whether certain products convert better than others.
 */
 
+SELECT DISTINCT
+    -- website_session_id,
+    website_pageviews.pageview_url,
+    COUNT(DISTINCT website_pageviews.website_session_id) AS sessions,
+    COUNT(DISTINCT orders.order_id) AS orders,
+    COUNT(DISTINCT orders.order_id)/COUNT(DISTINCT website_pageviews.website_session_id) AS viewed_product_to_order_rate
+FROM  website_pageviews
+   LEFT JOIN orders
+     ON orders.website_session_id = website_pageviews.website_session_id
+WHERE website_pageviews.created_at BETWEEN '2013-02-01' AND '2013-03-01'
+    AND website_pageviews.pageview_url IN ('/the-original-mr-fuzzy','/the-forever-love-bear')
+GROUP BY  1;
+
+-- PRODUCT PATHING ANALYSIS --
+
+-- Now we have new product, lets pull clickthrough rates from /product since the new product launch on 
+-- Jan 6th 2023, by product and compare to the 3 months leading up to launch as a baseline.and
+
+-- Step 1: finding the products pageview we care about
+CREATE TEMPORARY TABLE products_pageviews
+SELECT 
+    website_session_id,
+    website_pageview_id,
+    created_at,
+    CASE 
+      WHEN created_at < '2013-01-06' THEN 'A.Pre_product_2'
+      WHEN created_at >= '2013-01-06' THEN 'B.Post_product_2'
+      ELSE 'check logic'
+	END AS time_period
+FROM website_pageviews
+WHERE created_at < '2013-04-06' 
+     AND created_at > '2012-10-06'
+     AND pageview_url = '/products';
+     
+-- Step 2: find the next pageview id that occurs AFTER the product pageview
+CREATE TEMPORARY TABLE sessions_w_next_pageview_id
+SELECT 
+   products_pageviews.time_period,
+   products_pageviews.website_session_id,
+   products_pageviews.website_pageview_id,
+   MIN(website_pageviews.website_pageview_id) AS min_next_pageview_id
+FROM products_pageviews
+   LEFT JOIN website_pageviews
+     ON website_pageviews.website_session_id = products_pageviews.website_session_id
+     AND website_pageviews.website_pageview_id > products_pageviews.website_pageview_id
+GROUP BY 1,2,3;
+
+-- Step 3: find the pageview_url associated with any applicable next pageview id
+CREATE TEMPORARY TABLE sessions_w_next_pageview_url 
+SELECT 
+    sessions_w_next_pageview_id.time_period,
+    sessions_w_next_pageview_id.website_session_id,
+    sessions_w_next_pageview_id.min_next_pageview_id,
+    website_pageviews.pageview_url AS next_pageview_url
+FROM sessions_w_next_pageview_id
+   LEFT JOIN website_pageviews
+        ON website_pageviews.website_pageview_id = sessions_w_next_pageview_id.min_next_pageview_id;
+        
+-- Step 4: summarize the data and anlayze the pre and post period
+SELECT
+    time_period,
+    COUNT(DISTINCT website_session_id) AS sessions,
+    COUNT(DISTINCT CASE WHEN next_pageview_url IS NOT NULL THEN website_session_id ELSE NULL END) AS w_next_pg,
+    COUNT(DISTINCT CASE WHEN next_pageview_url IS NOT NULL THEN website_session_id ELSE NULL END)/COUNT(DISTINCT website_session_id) AS pct_w_next_pg,
+    COUNT(DISTINCT CASE WHEN next_pageview_url = '/the-original-mr-fuzzy' THEN website_session_id ELSE NULL END) AS to_mrfuzzy,
+    COUNT(DISTINCT CASE WHEN next_pageview_url = '/the-original-mr-fuzzy' THEN website_session_id ELSE NULL END)/COUNT(DISTINCT website_session_id) AS pct_to_mtfuzzy,
+    COUNT(DISTINCT CASE WHEN next_pageview_url = '/the-forever-love-bear' THEN website_session_id ELSE NULL END) AS to_lovebear,
+    COUNT(DISTINCT CASE WHEN next_pageview_url = '/the-forever-love-bear' THEN website_session_id ELSE NULL END)/COUNT(DISTINCT website_session_id) AS pct_to_lovebear
+FROM 
+    sessions_w_next_pageview_url
+GROUP BY time_period;
+   
+-- Looks like the percent of /products pageviews that clicked to Mr.fuzzy has gone down since the launch of the love Bear,
+-- but the overall clickthrough rate has gone up, so it seems to be generating additional product interest overall.
+-- We should look at the conversion funnel for each product individually.alter
+
+-- BUILDING PRODUCT LEVEL CONVERSION FUNNELS-- 
