@@ -148,3 +148,194 @@ GROUP BY time_period;
 -- We should look at the conversion funnel for each product individually.alter
 
 -- BUILDING PRODUCT LEVEL CONVERSION FUNNELS-- 
+
+-- I would like to look at our two products since january 6th and analyze the conversion funnels 
+-- from each product page to conversion.
+-- Need to produce a comparison between the two conbersion funnels, for all website traffic.
+
+-- Step 1: select all pageviews for relevant sessions
+-- step 2: figure out which pageview urls to look for 
+-- step 3: pull all pageviews and identify the funnel steps
+-- step 4: create the session-level conversion funnelview 
+-- step 5: aggregate the data to assess funnel performance 
+
+CREATE TEMPORARY TABLE sessions_seeing_product_pages
+SELECT 
+    website_session_id,
+    website_pageview_id,
+    pageview_url AS product_page_seen
+FROM
+    website_pageviews
+WHERE created_at < '2013-04-10'
+   AND created_at > '2013-01-06'
+   AND pageview_url IN ('/the-original-mr-fuzzy','/the-forever-love-bear');
+   
+  -- finding the right pageview_urls to build the funnels
+  SELECT DISTINCT
+     website_pageviews.pageview_url
+  FROM sessions_seeing_product_pages
+    LEFT JOIN website_pageviews
+        ON website_pageviews.website_session_id = sessions_seeing_product_pages.website_session_id
+        AND website_pageviews.website_pageview_id > sessions_seeing_product_pages.website_pageview_id;
+        
+-- We will look at the inner query first to look over the pageview-level results
+-- then, turn it into a subquery and make it the summary with flag
+
+SELECT 
+   sessions_seeing_product_pages.website_session_id,
+   sessions_seeing_product_pages.product_page_seen,
+   CASE WHEN pageview_url = '/cart' THEN 1 ELSE 0 END AS cart_page,
+   CASE WHEN pageview_url = '/shipping' THEN 1 ELSE 0 END AS shipping_page,
+   CASE WHEN pageview_url = '/billing-2' THEN 1 ELSE 0 END AS billing_page,
+   CASE WHEN pageview_url = '/thank-you-for-your-order' THEN 1 ELSE 0 END AS thanyou_page
+FROM sessions_seeing_product_pages
+   LEFT JOIN website_pageviews
+     ON website_pageviews.website_session_id = sessions_seeing_product_pages.website_session_id
+     AND website_pageviews.website_pageview_id > sessions_seeing_product_pages.website_pageview_id
+ORDER BY 
+     sessions_seeing_product_pages.website_session_id,
+     website_pageviews.created_at;
+ 
+CREATE TEMPORARY TABLE session_product_level_made_it_flags 
+SELECT 
+    website_session_id,
+    CASE 
+       WHEN product_page_seen = '/the-original-mr-fuzzy' THEN 'mrfuzzy'
+       WHEN product_page_seen = '/the-forever-love-bear' THEN 'love-bear'
+       ELSE 'check logic'
+       END AS product_seen,
+	MAX(cart_page) AS cart_made_it,
+    MAX(shipping_page) AS shipping_made_it,
+    MAX(billing_page) AS billing_made_it,
+    MAX(thankyou_page) AS thankyou_made_it
+    FROM(
+    SELECT
+        sessions_seeing_product_pages.website_session_id,
+        sessions_seeing_product_pages.product_page_seen,
+        CASE WHEN pageview_url = '/cart' THEN 1 ELSE 0 END AS cart_page,
+        CASE WHEN pageview_url = '/shipping' THEN 1 ELSE 0 END AS shipping_page,
+		CASE WHEN pageview_url = '/billing-2' THEN 1 ELSE 0 END AS billing_page,
+        CASE WHEN pageview_url = '/thank-you-for-your-order' THEN 1 ELSE 0 END AS thankyou_page
+     FROM sessions_seeing_product_pages
+        LEFT JOIN website_pageviews
+        ON website_pageviews.website_session_id = sessions_seeing_product_pages.website_session_id
+        AND website_pageviews.website_pageview_id > sessions_seeing_product_pages.website_pageview_id
+	  ORDER BY
+        sessions_seeing_product_pages.website_session_id,
+        website_pageviews.created_at
+	) AS pageview_level
+    GROUP BY 
+      website_session_id,
+      CASE 
+       WHEN product_page_seen = '/the-original-mr-fuzzy' THEN 'mrfuzzy'
+       WHEN product_page_seen = '/the-forever-love-bear' THEN 'love-bear'
+       ELSE 'check logic'
+       END;
+       
+-- Final output part 1
+SELECT 
+    product_seen,
+    COUNT(DISTINCT website_session_id) AS sessions,
+    COUNT(DISTINCT CASE WHEN cart_made_it = 1 THEN website_session_id ELSE NULL END) AS to_cart,
+    COUNT(DISTINCT CASE WHEN shipping_made_it = 1 THEN website_session_id ELSE NULL END) AS to_shipping,
+    COUNT(DISTINCT CASE WHEN billing_made_it = 1 THEN website_session_id ELSE NULL END) AS to_billing,
+    COUNT(DISTINCT CASE WHEN thankyou_made_it = 1 THEN website_session_id ELSE NULL END) AS to_thankyou
+FROM session_product_level_made_it_flags
+GROUP BY product_seen;
+
+-- Final output part 2 -- click rates
+SELECT 
+    product_seen,
+    COUNT(DISTINCT CASE WHEN cart_made_it = 1 THEN website_session_id ELSE NULL END)/COUNT(DISTINCT website_session_id) AS product_page_click_rate,
+    COUNT(DISTINCT CASE WHEN shipping_made_it = 1 THEN website_session_id ELSE NULL END)/COUNT(DISTINCT CASE WHEN cart_made_it = 1 THEN website_session_id ELSE NULL END) AS cart_clikc_rate,
+    COUNT(DISTINCT CASE WHEN billing_made_it = 1 THEN website_session_id ELSE NULL END)/COUNT(DISTINCT CASE WHEN shipping_made_it = 1 THEN website_session_id ELSE NULL END) AS shipping_click_rate,
+    COUNT(DISTINCT CASE WHEN thankyou_made_it = 1 THEN website_session_id ELSE NULL END)/COUNT(DISTINCT CASE WHEN billing_made_it = 1 THEN website_session_id ELSE NULL END) AS billing_click_rate
+FROM session_product_level_made_it_flags
+GROUP BY product_seen;
+
+-- This analysis shows that the love bear has a better click rate to the /cart page and comparable rates 
+-- throughout the rest of the funnel.
+-- seems like the second product was a great addition for our business.
+
+-- CROSS SELLING PRODUCT AND PRODUCT PORTFOLIO ANALYSIS --
+/* Cross selling analysis is about undertanding which product users are most likely to purchase together
+and offering smart product recommendation.
+Need to understand which products are often purchase together 
+Testing and optimizing the way we cross-sell products on our website
+Understanding the conversion rate impact and the overall revenue impact of trying to cross-selladditional
+product.
+*/
+
+SELECT * FROM order_items
+WHERE order_id BETWEEN 10000 AND 11000;
+
+SELECT
+   orders.order_id,
+   orders.primary_product_id,
+   order_items.product_id AS cross_sell_product
+FROM orders
+   LEFT JOIN order_items
+     ON order_items.order_id = orders.order_id
+     AND order_items.is_primary_item = 0 -- cross sell only, which is 0
+WHERE orders.order_id BETWEEN 10000 AND 11000;
+
+SELECT
+   orders.primary_product_id,
+   order_items.product_id AS cross_sell_product,
+   COUNT(DISTINCT orders.order_id)  AS orders
+FROM orders
+   LEFT JOIN order_items
+     ON order_items.order_id = orders.order_id
+     AND order_items.is_primary_item = 0 -- cross sell only, which is 0
+WHERE orders.order_id BETWEEN 10000 AND 11000 
+GROUP BY 1,2;
+
+SELECT
+   orders.primary_product_id,
+   COUNT(DISTINCT orders.order_id)  AS orders,
+   COUNT(DISTINCT CASE WHEN order_items.product_id = 1 THEN orders.order_id ELSE NULL END) AS X_sell_prod1,
+   COUNT(DISTINCT CASE WHEN order_items.product_id = 2 THEN orders.order_id ELSE NULL END) AS X_sell_prod2,
+   COUNT(DISTINCT CASE WHEN order_items.product_id = 3 THEN orders.order_id ELSE NULL END) AS X_sell_prod3
+FROM orders
+   LEFT JOIN order_items
+     ON order_items.order_id = orders.order_id
+     AND order_items.is_primary_item = 0 -- cross sell only, which is 0
+WHERE orders.order_id BETWEEN 10000 AND 11000
+GROUP BY 1;
+
+-- Another way of writing the query to get result same as above --
+
+SELECT
+   orders.primary_product_id,
+   COUNT(DISTINCT orders.order_id) AS orders,  -- Total distinct orders
+   COUNT(DISTINCT CASE WHEN order_items.product_id = 1 AND order_items.is_primary_item = 0 THEN orders.order_id ELSE NULL END) AS X_sell_prod1,  -- Orders containing product_id 1 as cross-sell
+   COUNT(DISTINCT CASE WHEN order_items.product_id = 2 AND order_items.is_primary_item = 0 THEN orders.order_id ELSE NULL END) AS X_sell_prod2,  -- Orders containing product_id 2 as cross-sell
+   COUNT(DISTINCT CASE WHEN order_items.product_id = 3 AND order_items.is_primary_item = 0 THEN orders.order_id ELSE NULL END) AS X_sell_prod3   -- Orders containing product_id 3 as cross-sell
+FROM orders
+   LEFT JOIN order_items
+     ON order_items.order_id = orders.order_id
+WHERE orders.order_id BETWEEN 10000 AND 11000
+GROUP BY orders.primary_product_id;
+
+
+SELECT
+   orders.primary_product_id,
+   COUNT(DISTINCT orders.order_id) AS orders,  -- Total distinct orders
+   COUNT(DISTINCT CASE WHEN order_items.product_id = 1 AND order_items.is_primary_item = 0 THEN orders.order_id ELSE NULL END) AS X_sell_prod1,
+   COUNT(DISTINCT CASE WHEN order_items.product_id = 2 AND order_items.is_primary_item = 0 THEN orders.order_id ELSE NULL END) AS X_sell_prod2,
+   COUNT(DISTINCT CASE WHEN order_items.product_id = 3 AND order_items.is_primary_item = 0 THEN orders.order_id ELSE NULL END) AS X_sell_prod3,
+   COUNT(DISTINCT CASE WHEN order_items.product_id = 1 AND order_items.is_primary_item = 0 THEN orders.order_id ELSE NULL END)/COUNT(DISTINCT orders.order_id) AS X_sell_prod1_rate,
+   COUNT(DISTINCT CASE WHEN order_items.product_id = 2 AND order_items.is_primary_item = 0 THEN orders.order_id ELSE NULL END)/COUNT(DISTINCT orders.order_id) AS X_sell_prod2_rate,
+   COUNT(DISTINCT CASE WHEN order_items.product_id = 3 AND order_items.is_primary_item = 0 THEN orders.order_id ELSE NULL END)/COUNT(DISTINCT orders.order_id) AS X_sell_prod3_rate
+FROM orders
+   LEFT JOIN order_items
+     ON order_items.order_id = orders.order_id
+WHERE orders.order_id BETWEEN 10000 AND 11000
+GROUP BY orders.primary_product_id;
+
+-- On september 25th we started giving customers the option to add a 2nd product while on the /cart page.
+-- We need to compare the month before vs the month after the change. we would like to see CTR from the
+-- /cart page, avg product per order, AOV, and overall revenue per/cart page view. 
+
+
+
